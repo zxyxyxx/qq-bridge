@@ -1,16 +1,19 @@
-// SnowLuma 连接自发现：解决「换 QQ 账号后 token 变了，工具就 401」的问题。
+// OneBot 连接自发现：解决「换 QQ 账号后 token 变了，工具就 401」的问题。
+//
+// 同时支持 SnowLuma 与 NapCat 两种协议端（都是 OneBot v11）：
+//   - SnowLuma：config/onebot_<QQ号>.json，顶层 `networks`（复数）+ `accessToken`
+//   - NapCat：  config/onebot11_<QQ号>.json，顶层 `network`（单数）+ `token`
 //
 // 背景（实测确认）：
-//   SnowLuma 的 OneBot 配置是**按账号分文件**的：<SnowLuma>/config/onebot_<QQ号>.json，
-//   每个账号有各自的 httpServers[].accessToken（**HTTP 与 WebSocket 的 token 还是不同的**）。
-//   换账号登录后，旧的 accessToken 直接 401（retcode 1401），
+//   协议端的 OneBot 配置是**按账号分文件**的，每个账号有各自的 token
+//   （**HTTP 与 WebSocket 的 token 还是不同的**）。换账号登录后，旧的 token 直接 401（retcode 1401），
 //   于是任何把它硬编码在 config.json 里的工具（独立工具、图形界面、甚至 qq-bridge）全部失效。
 //
 // 本模块的做法：**不猜**，而是拿候选 token 真去问一次 get_login_info，谁通就用谁，
 // 并把"当前是哪个账号"一并回报出来。候选来源：
 //   1) 显式传入的 token / 环境变量
 //   2) config.json 里已配置的 token（保持兼容）
-//   3) SnowLuma config 目录下所有 onebot_*.json 里的 HTTP token（真实来源）
+//   3) 协议端 config 目录下所有 onebot_*.json / onebot11_*.json 里的 token（真实来源）
 //
 // 这样换账号后无需手改任何配置，工具自动跟上。
 import fs from 'node:fs';
@@ -35,12 +38,17 @@ export function snowLumaHomeCandidates({ cfg = null } = {}) {
 }
 
 /**
- * 从 SnowLuma 的 per-account 配置里读出候选 token。
+ * 从协议端的 per-account 配置里读出候选 token。
+ *
+ * 支持两种协议端（都是 OneBot v11，只是配置文件名/字段不同）：
+ *   - SnowLuma：config/onebot_<QQ号>.json，顶层 `networks`（复数），token 字段 `accessToken`
+ *   - NapCat：  config/onebot11_<QQ号>.json，顶层 `network`（单数），token 字段 `token`
  *
  * 重要：**HTTP 与 WebSocket 是两个不同的 token**（各自的 server 配置里各有一份），
  * 桥接用 WS 连 3001、工具用 HTTP 连 3000，所以两边都要能取到。
+ * NapCat 的 server 带 `enable` 字段，显式关闭（false）的视为不存在。
  *
- * 返回 [{ uin, file, http: {token,host,port}, ws: {token,host,port} }]，按 uin 排序。
+ * 返回 [{ uin, file, protocol, http: {token,host,port}, ws: {token,host,port} }]，按 uin 排序。
  */
 export function readOneBotTokens(homeDir) {
   const dir = path.join(homeDir, 'config');
@@ -53,18 +61,31 @@ export function readOneBotTokens(homeDir) {
   const out = [];
   for (const e of entries) {
     if (!e.isFile()) continue;
-    const m = /^onebot_(\d+)\.json$/i.exec(e.name);
+    // SnowLuma：onebot_<QQ号>.json；NapCat：onebot11_<QQ号>.json
+    let m = /^onebot_(\d+)\.json$/i.exec(e.name);
+    let protocol = 'snowluma';
+    if (!m) {
+      m = /^onebot11_(\d+)\.json$/i.exec(e.name);
+      protocol = 'napcat';
+    }
     if (!m) continue;
     try {
       const j = JSON.parse(fs.readFileSync(path.join(dir, e.name), 'utf8'));
-      const nets = j?.networks ?? {};
-      const http = Array.isArray(nets.httpServers) ? nets.httpServers[0] : null;
-      const ws = Array.isArray(nets.wsServers) ? nets.wsServers[0] : null;
+      // SnowLuma 顶层 `networks`（复数）；NapCat 顶层 `network`（单数）。
+      const nets = j?.networks ?? j?.network ?? {};
+      const rawHttp = Array.isArray(nets.httpServers) ? nets.httpServers[0] : null;
+      const rawWs = Array.isArray(nets.wsServers) ? nets.wsServers[0] : null;
+      const httpActive = rawHttp && rawHttp.enable !== false;
+      const wsActive = rawWs && rawWs.enable !== false;
+      const tokenOf = (s) => (s ? String(s.accessToken ?? s.token ?? '') : '');
+      const hostOf = (s) => (s ? String(s.host || '127.0.0.1') : '127.0.0.1');
+      const portOf = (s, dft) => (s ? (Number(s.port) || dft) : dft);
       out.push({
         uin: m[1],
         file: path.join(dir, e.name),
-        http: http ? { token: String(http.accessToken ?? ''), host: http.host || '127.0.0.1', port: Number(http.port) || 3000 } : null,
-        ws: ws ? { token: String(ws.accessToken ?? ''), host: ws.host || '127.0.0.1', port: Number(ws.port) || 3001 } : null
+        protocol,
+        http: httpActive ? { token: tokenOf(rawHttp), host: hostOf(rawHttp), port: portOf(rawHttp, 3000) } : null,
+        ws: wsActive ? { token: tokenOf(rawWs), host: hostOf(rawWs), port: portOf(rawWs, 3001) } : null
       });
     } catch {
       // 单个文件坏了不影响其它账号
@@ -147,7 +168,7 @@ export async function discoverSnowLumaConnection({
     if (r.ok) {
       // 找到有效 HTTP token 后，把**同一个账号**的 WS 信息也带回去：
       // 桥接走 WebSocket，用另一个 token、另一个端口 —— 只修 HTTP 的话桥接仍然 1006 重连。
-      const uin = /onebot_(\d+)\.json/.exec(c.source)?.[1] ?? String(r.data?.user_id ?? '');
+      const uin = /onebot(?:11)?_(\d+)\.json/.exec(c.source)?.[1] ?? String(r.data?.user_id ?? '');
       const w = wsInfo.get(uin) ?? null;
       return {
         ok: true,

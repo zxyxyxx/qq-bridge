@@ -10,6 +10,9 @@
 
 把 QQ 消息接入 DSH agent：QQ 好友/群发来的消息会变成 DSH 会话里的用户消息，agent 的回复（含提问、工具审批）会发回 QQ。
 
+> 🔌 **本 fork 新增 NapCat 支持**：协议端既支持 SnowLuma，也支持 NapCat（两者都是 OneBot v11）。
+> token 自愈会自动识别两种配置目录。NapCat 配合方法详见 **[docs/NapCat.md](docs/NapCat.md)**。
+
 > ⚠️ **当前版本 `v0.2.1-r1`，适配 DSH 0.2.1-rc.2**（0.2.0-rc.2 亦兼容；两个版本上都逐项实测：`npm run verify:adaptation`）。
 > 鉴权用 `~/.dsh` 里持久化的浏览器会话签名密钥**离线铸造 Cookie** —— DSH 0.1.7 起进程启动 token
 > 只存在于内存、不再落盘，旧版「从 guard 日志里读 token」的方式已失效。agent preset 是 DSH 0.1.7 起的
