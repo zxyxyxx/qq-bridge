@@ -3121,7 +3121,7 @@ async function main() {
   // 才能拿到消息，它自己的日志里管这层叫 `[Hook]`。这层会退化：
   //     WARN [Hook] receive path stale: ... silentFor=136193ms; reporting good=false
   // 而 **SnowLuma 进程与它的 OneBot WebSocket 都还活着**。于是桥接这边一切正常：
-  // WebSocket 是通的、`bot.on('open')` 打过「SnowLuma 已连接」，控制台没有任何异常，
+  // WebSocket 是通的、`bot.on('open')` 打过「OneBot 已连接」，控制台没有任何异常，
   // 但群里一条消息都不来 —— 运维看到的现象是「接了但没反应」，而**没有任何证据指向
   // SnowLuma 的 hook**，于是被报成「qq-bridge 注入失败」。
   //
@@ -3192,13 +3192,13 @@ async function main() {
     const confirmed = snowlumaHealth.good === false;
     let hint = null;
     if (confirmed) {
-      hint = 'SnowLuma 自报接收链路异常（good=false）：它的 [Hook] 收不到 QQ 客户端的数据，'
-        + '消息进不来。这不是桥接的问题。请查看 SnowLuma 的 logs/snowluma-*.log 里的 [Hook] 行'
-        + '（receive path stale / process enumeration timed out），并考虑升级 SnowLuma。';
+      hint = '协议端自报接收链路异常（good=false）：它的 [Hook] 收不到 QQ 客户端的数据，'
+        + '消息进不来。这不是桥接的问题。请查看协议端的日志里的 [Hook] 行'
+        + '（receive path stale / process enumeration timed out），并考虑升级协议端。';
     } else if (silent) {
       hint = `已连接但 ${Math.round(agoMs / 60000)} 分钟没有收到任何事件包（连 30 秒一次的心跳都没有）。`
-        + '这说明 SnowLuma 的 OneBot 服务/进程本身可能已经卡住或不在了，而不只是收不到 QQ 数据；'
-        + '请直接查看 SnowLuma 的 logs/snowluma-*.log。';
+        + '这说明协议端的 OneBot 服务/进程本身可能已经卡住或不在了，而不只是收不到 QQ 数据；'
+        + '请直接查看协议端的日志。';
     }
     return {
       // 只读 snowlumaHealth.connected（由 bot 的 open/close 维护），**不要**在这里引用
@@ -3223,13 +3223,13 @@ async function main() {
     if (snap.degraded && !snowlumaHealth.degraded) {
       snowlumaHealth.degraded = true;
       snowlumaHealth.reason = snap.hint ?? '';
-      log(`⚠️ SnowLuma 上游不健康：${snap.hint}`);
-      log('   这不是桥接的问题：桥接没有任何原生/注入面，也不控制 SnowLuma 或 QQ。');
-      log('   排查：SnowLuma 的 logs/snowluma-*.log 里搜 [Hook]（看是否有 "receive path stale" 或 "process enumeration timed out"）。');
+      log(`⚠️ OneBot 上游不健康：${snap.hint}`);
+      log('   这不是桥接的问题：桥接没有任何原生/注入面，也不控制协议端或 QQ。');
+      log('   排查：协议端的日志里搜 [Hook]（看是否有 "receive path stale" 或 "process enumeration timed out"）。');
     } else if (!snap.degraded && snowlumaHealth.degraded) {
       snowlumaHealth.degraded = false;
       snowlumaHealth.reason = '';
-      log('✅ SnowLuma 上游已恢复正常（good≠false 且事件包在流动）');
+      log('✅ OneBot 上游已恢复正常（good≠false 且事件包在流动）');
     }
   }
 
@@ -12493,10 +12493,10 @@ async function main() {
       const sub = String(event?.sub_type ?? '');
       snowlumaHealth.accountOnline = sub === 'online';
       if (sub === 'offline') {
-        log('⚠️ SnowLuma 报告 QQ 账号会话已离线（bot_status: offline）—— QQ 侧掉线或被顶号，'
+        log('⚠️ 协议端报告 QQ 账号会话已离线（bot_status: offline）—— QQ 侧掉线或被顶号，'
           + '在重新登录之前群里不会有任何消息进来。');
       } else if (sub === 'online') {
-        log('SnowLuma 报告 QQ 账号会话已上线（bot_status: online）');
+        log('协议端报告 QQ 账号会话已上线（bot_status: online）');
       }
     });
   } catch (error) {
@@ -12507,7 +12507,7 @@ async function main() {
     // 用实际连接地址（自愈后可能与 config 里的初值不同，别打印过期的那个）
     const connectedUrl = bot.url ?? cfg.snowluma.wsUrl;
     snowlumaHealth.connected = true;
-    log(`SnowLuma 已连接：${connectedUrl}`);
+    log(`OneBot 已连接：${connectedUrl}`);
     // 「已连接」只说明与 SnowLuma 的 WebSocket 通了，**不说明 QQ 侧收得到消息** ——
     // 这个区别见 startSnowlumaWatch 的说明。这里顺手把上游健康快照刷一次。
     void pollSnowlumaStatus();
@@ -12629,7 +12629,7 @@ async function main() {
 
   bot.on('close', (info) => {
     snowlumaHealth.connected = false;
-    log(`SnowLuma 连接断开（code=${info?.code ?? '?'}），重连中…`);
+    log(`OneBot 连接断开（code=${info?.code ?? '?'}），重连中…`);
     // 连不上时最常见的原因就是换了 QQ 账号 → token 变了；顺手自愈。
     // 注意 1006 在**每次启动**都可能出现一次：HTTP token 与 WS token 是两个不同的值，
     // config.json 里存的是前者，WS 需要用自愈发现的那个（详见 bot.connect() 处的说明）。
@@ -12642,7 +12642,7 @@ async function main() {
     const detail = error && typeof error === 'object'
       ? [error.code, error.message, error.reason, error.type].filter(Boolean).join(' | ') || JSON.stringify(error)
       : String(error ?? '');
-    log(`SnowLuma 错误：${detail || '(无详情)'}`);
+    log(`OneBot 错误：${detail || '(无详情)'}`);
     void healTokenIfStale(`error ${detail}`.trim().slice(0, 200));
   });
 
@@ -12652,10 +12652,10 @@ async function main() {
     // SnowLuma 的 **HTTP token（默认 3000）与 WS token（默认 3001）是两个不同的值**
     // （实测：同一个账号，两者不同；config.json 只能存一个，存的是 HTTP 那个）。
     // 所以 WS 首次连接通常会被拒 → close(1006) → 触发 token 自愈（重新发现 WS token）
-    // → 重连成功后才是「SnowLuma 已连接」。若 homeDir 没配/被移动/读不到 SnowLuma 的
+    // → 重连成功后才是「OneBot 已连接」。若 homeDir 没配/被移动/读不到 SnowLuma 的
     // config/onebot_<QQ>.json，自愈就无从下手，这时才会一直连不上 —— 那种情况请查
     // 日志里的「token 自愈失败」与 config.json 的 snowluma.homeDir。
-    log(`SnowLuma 首次连接未成功（将在后台自动重连并尝试自愈 WS token）: ${error?.message ?? error}`);
+    log(`OneBot 首次连接未成功（将在后台自动重连并尝试自愈 WS token）: ${error?.message ?? error}`);
   });
   log('桥接已启动。按 Ctrl+C 退出。');
   // 预热表情库：启动时同步一次 QQ 收藏表情，失败不阻塞（AI 首次调用工具时还会再试）。
